@@ -36,12 +36,21 @@ app.get('/mine_block', (req, res) => {
     res.status(200).send("Block mined! Nonce: " + BChain.chain[BChain.chain.length-1].nonce);
 });
 
+/**
+ * Shows the blockchain stats
+ */
+app.get('/blockchain_stats', (req, res) => {       
+    res.status(200).send("Blockchain Stats! <br></br>" + "Average Hash Rate: " + BChain.calculateAverageHashRate() + " kH/s"
+                            + "<br><br/>" + "Current Difficulty: " + BChain.setDifficulty()
+                            + "<br><br/>" + "Current Comparsion String: " + BChain.setComparisonString(BChain.setDifficulty())
+                        );
+});
 
 /**
  * Calculate blockchain validity
  */
 app.get('/validate_chain', (req, res) => {
-    res.status(200).send("chainIsValid: ", BChain.chainIsValid());
+    res.status(200).send("chainIsValid: " + BChain.chainIsValid());
 });
 
 // POST Endpoints
@@ -133,7 +142,11 @@ app.post('/broadcast', (req, res) => {
         res.status(400).send('msg required!');
         return;
     }
-    broadcast(req.body.msg);
+    try {
+        broadcast(req.body.msg);
+    } catch (e) {
+        res.status(400).send(e);
+    }
     res.status(200).send("Broadcasted!");
 });
 
@@ -162,7 +175,7 @@ function broadcast(msg) {
             body: JSON.stringify({ "msg": msg })
         };
         request(options, function (error, response) {
-            if (error) throw new Error('err: '+error);
+            if (error) throw error;
             console.log('res: '+response.body);
         });
     });

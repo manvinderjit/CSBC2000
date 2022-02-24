@@ -38,12 +38,15 @@ class Transaction {
  * Blockchain represents the entire blockchain with the
  * ability to create transactions, mine and validate
  * all blocks.
+ * following params:
+ * @blockHashRate is used to store hashrate in kH/s for each block, 0 for genesis block
  */
 class Blockchain {
     constructor() {
         this.chain = [];
         this.pendingTransactions = [];
         this.addBlock('0');
+        this.blockHashRate = [0];
     }
 
     /**
@@ -80,10 +83,79 @@ class Blockchain {
     }
 
     /**
-     * Find nonce that satisfies our proof of work.
+     * Generate a random nonce string
+     * * following params:
+     * @randomNonce the nonce generated randomly
+     * @allowedCharacters characters allowed in the nonce
+     * @charactersLength total length of @allowedCharacters
+     */
+    generateRandomNonce(nonceLength) {
+        var randomNonce = '';
+        var allowedCharacters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        var charactersLength = allowedCharacters.length;
+        for ( var i = 0; i <nonceLength; i++ ) {
+            randomNonce += allowedCharacters.charAt(Math.floor(Math.random() * 
+            charactersLength));
+        }
+        return randomNonce;
+    }
+    
+    /**
+     * Set difficulty based on the total number of blocks
+     * following params:
+     * @incrementFactor adjusts the difficulty of the blockchain, higher number lowers difficulty
+     * @difficulty the calculated difficulty
+     */
+    setDifficulty() {
+        let incrementFactor = 2;
+        let difficulty = Math.floor((this.chain.length/incrementFactor) + 1);
+        return difficulty;
+    }
+
+    /**
+     * Set comparison string based on difficulty - 0, 00, 000, 0000, and so on...
+     * following params:
+     * @comparisonString the comparison string chosen for comparing the hash
+     */
+    setComparisonString(difficulty) {
+        let comparisonString = "";
+        for (var i = 1; i <= difficulty; i++ ) {
+            comparisonString += "0";
+        }
+        return comparisonString;
+    }
+
+    /**
+     * Find nonce that satisfies the proof of work
+     * following params:
+     * @numberOfCalculatedHashes total number of hashes calculated for each block mined to meet the proofOfWork condition
+     * @timeTaken total time taken to achieve the desired hash
+     * @genNonce the random nonce generated, a length of 10 is used
      */
     proofOfWork() {
-        //TODO
+        
+        let prevHash = this.chain.length !== 0 ? this.chain[this.chain.length - 1].hash : '0';
+        let difficulty = this.setDifficulty();
+        let comparisonString = this.setComparisonString(difficulty);
+                
+        var numberOfCalculatedHashes = 0;
+        var timeStart = performance.now();
+
+        // Calculate a nonce that satisfies the specified comparisonString condition
+        for ( var i = 1; i > 0; i++ ) {
+            
+            var genNonce = this.generateRandomNonce(10);
+            var nextHash = this.getHash(prevHash, this.pendingTransactions, genNonce);
+            numberOfCalculatedHashes ++;
+            
+            // If hash meets the comparison substring condition
+            if( nextHash.substring(0,difficulty) == comparisonString ) {
+                var timeEnd = performance.now();
+                var timeTaken = (timeEnd - timeStart)/1000; // Convert to seconds
+                this.blockHashRate.push(parseFloat((numberOfCalculatedHashes/(timeTaken * 1000)).toFixed(3))); // Divided by 1000 as converting to kH/s
+                return genNonce;
+            }
+        }
     }
 
     /**
@@ -93,9 +165,24 @@ class Blockchain {
         let tx_id_list = [];
         this.pendingTransactions.forEach((tx) => tx_id_list.push(tx.tx_id));
         let nonce = this.proofOfWork();
-        this.addBlock('0');
-    }
+        this.addBlock(nonce); 
+    }    
 
+    /**
+     * Calculate average hash rate
+     * following params:
+     * @sumHashRate sum of all hash rates, except genesis block
+     * @avgHashRate the average of all hash rates, except genesis block
+     */
+    calculateAverageHashRate() {
+        let avgHashRate = 0;
+        let sumHashRate = 0;
+        for( var i = 1; i < this.blockHashRate.length; i++) {
+            sumHashRate += this.blockHashRate[i];
+        }
+        avgHashRate = sumHashRate/(this.blockHashRate.length - 1);
+        return avgHashRate;
+    }
 
     /**
      * Check if the chain is valid by going through all blocks and comparing their stored
@@ -106,13 +193,13 @@ class Blockchain {
             let tx_id_list = [];
             this.chain[i].transactions.forEach((tx) => tx_id_list.push(tx.tx_id));
 
-            if(i == 0 && this.chain[i].hash !==this.getHash('0',[],'0')){
+            if(i == 0 && this.chain[i].hash !==this.getHash('0',[],'0')){                
                 return false;
             }
-            if(i > 0 && this.chain[i].hash !== this.getHash(this.chain[i-1].hash, this.chain[i].transactions, '0')){
+            if(i > 0 && this.chain[i].hash !== this.getHash(this.chain[i-1].hash, this.chain[i].transactions, this.chain[i].nonce)){                
                 return false;
             }
-            if(i > 0 && this.chain[i].prevHash !== this.chain[i-1].hash){
+            if(i > 0 && this.chain[i].prevHash !== this.chain[i-1].hash){                
                 return false;
             }
         }
@@ -137,8 +224,8 @@ function simulateChain(blockchain, numTxs, numBlocks) {
     }
 }
 
-const BChain = new Blockchain();
-simulateChain(BChain, 5, 3);
+//const BChain = new Blockchain();
+//simulateChain(BChain, 5, 3);
 
 module.exports = Blockchain;
 // console.dir(BChain,{depth:null});
