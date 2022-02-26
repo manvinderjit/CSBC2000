@@ -31,8 +31,8 @@ app.get('/get_blockchain', (req, res) => {
 /**
  * Mine transactions from the mempool into a new block and return the nonce.
  */
-app.get('/mine_block', (req, res) => {
-    BChain.mine();
+app.get('/mine_block', async (req, res) => {
+    await BChain.mine();
     res.status(200).send("Block mined! Nonce: " + BChain.chain[BChain.chain.length-1].nonce);
 });
 

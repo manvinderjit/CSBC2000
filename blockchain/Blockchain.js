@@ -8,16 +8,20 @@ const uuid = require('uuid');
  * @timestamp shows when it was created
  * @transactions represents the data about transactions
  * added to the chain
- * @hash represents the hash of the previous block
+ * @prevHash represents the hash of the previous block
+ * @hash represents the hash of the block
+ * @nonce represents the nonce of the block
+ * @merkleRoot represents the merkleRoot of the block
  */
 class Block {
-    constructor(index, transactions, prevHash, nonce, hash) {
+    constructor(index, transactions, prevHash, nonce, hash, merkleRoot) {
         this.index = index;
         this.timestamp = Math.floor(Date.now() / 1000);
         this.transactions = transactions;
         this.prevHash = prevHash;
         this.hash = hash;
         this.nonce = nonce;
+        this.merkleroot = merkleRoot;
     }
 }
 
@@ -59,11 +63,12 @@ class Blockchain {
     /**
      * Add a block to the blockchain
      */
-    addBlock(nonce) {
+    async addBlock(nonce, merkleRootReturned) {
         let index = this.chain.length;
         let prevHash = this.chain.length !== 0 ? this.chain[this.chain.length - 1].hash : '0';
-        let hash = this.getHash(prevHash, this.pendingTransactions, nonce);
-        let block = new Block(index, this.pendingTransactions, prevHash, nonce, hash);
+        let merkleRoot = merkleRootReturned ?? "";
+        let hash = this.getHash(prevHash, merkleRoot, nonce);
+        let block = new Block(index, this.pendingTransactions, prevHash, nonce, hash, merkleRoot );
 
         // reset pending txs
         this.pendingTransactions = [];
@@ -73,12 +78,31 @@ class Blockchain {
     /**
      * Gets the hash of a block.
      */
-    getHash(prevHash, txs, nonce) {
-        var encrypt = prevHash + nonce;
-        txs.forEach((tx) => { encrypt += tx.tx_id; });
-        var hash=crypto.createHmac('sha256', "secret")
+    getHash(prevHash, merkleRoot, nonce) {
+        var encrypt = prevHash + nonce + merkleRoot;        
+        var hash=crypto.createHmac('sha256', "supersecret")
             .update(encrypt)
             .digest('hex');
+        return hash;
+    }
+
+    /**
+     * Gets the merkle hash. Used to generate hash for all nodes except leaf nodes. Employs a different secret key
+     */    
+    getNonLeafNodeHash(inputHash){        
+        var hash=crypto.createHmac('sha256', "deepsecret")
+            .update(inputHash)
+            .digest('hex');        
+        return hash;
+    }
+
+    /**
+     * Gets the hash of transactions in a block. Used to generate hash for leaf nodes. Employs a different secret key
+     */    
+    getLeafNodeHash(transaction) {        
+        var hash=crypto.createHmac('sha256', "secret")
+            .update(transaction.tx_id)
+            .digest('hex');        
         return hash;
     }
 
@@ -126,13 +150,67 @@ class Blockchain {
     }
 
     /**
+     * Recursively calculate merkle tree for a block
+     * following params:
+     * @treeNodes defines the number of leafnodes for a parent node in the merkle tree
+     * @nextTransactionNumber represents the transaction number being iterated
+     * @merkleRoot represents the merkleRoot calculated for the block
+     */
+    async calculateMerkleTreeRecursively(pendingTransactions, nextTransaction, prevMerkleRootCurrentBlock){
+                
+        let treeNodes = 2; // 2 for binary merkle tree, n for n-ary merkle tree     
+
+        let nextTransactionNumber = nextTransaction ?? 0; 
+        let merkleRoot = prevMerkleRootCurrentBlock ?? "";
+        
+        // If no transactions in a block
+        if (pendingTransactions.length == 0){          
+
+            merkleRoot = "";
+            
+        }else if(pendingTransactions[nextTransactionNumber+1]){ // If this is not the last transaction
+
+            let subTreeHash = "";            
+            // Calculate hash of subtree based on treeNodes param
+            for( var i=0; i<treeNodes; i++){
+                if(pendingTransactions[nextTransactionNumber+i]){
+                    subTreeHash += await this.getLeafNodeHash(pendingTransactions[nextTransactionNumber+i])                    
+                }              
+            }
+            merkleRoot += (await this.getNonLeafNodeHash(subTreeHash));            
+            if(nextTransactionNumber > 0)
+            {
+                merkleRoot = await this.getNonLeafNodeHash(merkleRoot);
+            }
+
+        }else{ // If this is the last or only transaction
+            
+            merkleRoot += await this.getLeafNodeHash(pendingTransactions[nextTransactionNumber]);
+            if(nextTransactionNumber > 0)
+            {
+                merkleRoot = await this.getNonLeafNodeHash(merkleRoot);
+            }
+        }
+        
+        nextTransactionNumber += treeNodes;        
+        
+        // Calls the function recursively untill there are no more transactions
+        if(pendingTransactions[nextTransactionNumber]){
+            return await this.calculateMerkleTreeRecursively(pendingTransactions, nextTransactionNumber, merkleRoot)
+        }else{            
+            return merkleRoot;
+        }
+        
+    }
+
+    /**
      * Find nonce that satisfies the proof of work
      * following params:
      * @numberOfCalculatedHashes total number of hashes calculated for each block mined to meet the proofOfWork condition
      * @timeTaken total time taken to achieve the desired hash
      * @genNonce the random nonce generated, a length of 10 is used
      */
-    proofOfWork() {
+    proofOfWork(merkleRoot) {
         
         let prevHash = this.chain.length !== 0 ? this.chain[this.chain.length - 1].hash : '0';
         let difficulty = this.setDifficulty();
@@ -140,12 +218,13 @@ class Blockchain {
                 
         var numberOfCalculatedHashes = 0;
         var timeStart = performance.now();
-
+        
         // Calculate a nonce that satisfies the specified comparisonString condition
         for ( var i = 1; i > 0; i++ ) {
             
             var genNonce = this.generateRandomNonce(10);
-            var nextHash = this.getHash(prevHash, this.pendingTransactions, genNonce);
+            
+            var nextHash = this.getHash(prevHash, merkleRoot, genNonce);
             numberOfCalculatedHashes ++;
             
             // If hash meets the comparison substring condition
@@ -161,11 +240,12 @@ class Blockchain {
     /**
      * Mine a block and add it to the chain.
      */
-    mine() {
+    async mine() {
         let tx_id_list = [];
-        this.pendingTransactions.forEach((tx) => tx_id_list.push(tx.tx_id));
-        let nonce = this.proofOfWork();
-        this.addBlock(nonce); 
+        this.pendingTransactions.forEach((tx) => tx_id_list.push(tx.tx_id));                
+        let merkleRoot = await this.calculateMerkleTreeRecursively(this.pendingTransactions);
+        let nonce = this.proofOfWork(merkleRoot);
+        this.addBlock(nonce, merkleRoot); 
     }    
 
     /**
@@ -189,14 +269,12 @@ class Blockchain {
      * hash with the computed hash.
      */
     chainIsValid(){
-        for(var i=0;i<this.chain.length;i++){
-            let tx_id_list = [];
-            this.chain[i].transactions.forEach((tx) => tx_id_list.push(tx.tx_id));
+        for(var i=0;i<this.chain.length;i++){            
 
-            if(i == 0 && this.chain[i].hash !==this.getHash('0',[],'0')){                
+            if(i == 0 && this.chain[i].hash !==this.getHash('0','','0')){                
                 return false;
             }
-            if(i > 0 && this.chain[i].hash !== this.getHash(this.chain[i-1].hash, this.chain[i].transactions, this.chain[i].nonce)){                
+            if(i > 0 && this.chain[i].hash !== this.getHash(this.chain[i-1].hash, this.chain[i].merkleroot, this.chain[i].nonce)){
                 return false;
             }
             if(i > 0 && this.chain[i].prevHash !== this.chain[i-1].hash){                
@@ -204,11 +282,7 @@ class Blockchain {
             }
         }
         return true;
-    }
-}
-
-function constructMerkleTree(inputs) {
-    //TODO
+    }    
 }
 
 function simulateChain(blockchain, numTxs, numBlocks) {
