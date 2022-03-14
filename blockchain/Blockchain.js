@@ -79,7 +79,7 @@ class Blockchain {
      * Gets the hash of a block.
      */
     getHash(prevHash, merkleRoot, nonce) {
-        var encrypt = prevHash + nonce + merkleRoot;        
+        var encrypt = prevHash + nonce + merkleRoot;
         var hash=crypto.createHmac('sha256', "supersecret")
             .update(encrypt)
             .digest('hex');
@@ -89,20 +89,27 @@ class Blockchain {
     /**
      * Gets the merkle hash. Used to generate hash for all nodes except leaf nodes. Employs a different secret key
      */    
-    getNonLeafNodeHash(inputHash){        
+    getNonLeafNodeHash(inputHash){
         var hash=crypto.createHmac('sha256', "deepsecret")
             .update(inputHash)
-            .digest('hex');        
+            .digest('hex');
         return hash;
     }
 
     /**
      * Gets the hash of transactions in a block. Used to generate hash for leaf nodes. Employs a different secret key
      */    
-    getLeafNodeHash(transaction) {        
+    getLeafNodeHash(transaction) {
         var hash=crypto.createHmac('sha256', "secret")
             .update(transaction.tx_id)
-            .digest('hex');        
+            .digest('hex');
+        return hash;
+    }
+
+    hashTransaction(transaction) {
+        var hash=crypto.createHmac('sha256', "secret")
+            .update(transaction.tx_id)
+            .digest('hex');
         return hash;
     }
 
@@ -150,57 +157,92 @@ class Blockchain {
     }
 
     /**
-     * Recursively calculate merkle tree for a block
-     * following params:
-     * @treeNodes defines the number of leafnodes for a parent node in the merkle tree
-     * @nextTransactionNumber represents the transaction number being iterated
+     * Recursively calculate merkle tree for a block by using the @recursivelyCalculateMerkleRootFromHashes function
+     * Two functions are used as separate hashing functions are implemented for leaf node and non-leaf nodes
+     * following params:      
      * @merkleRoot represents the merkleRoot calculated for the block
-     */
-    async calculateMerkleTreeRecursively(pendingTransactions, nextTransaction, prevMerkleRootCurrentBlock){
-                
-        let treeNodes = 2; // 2 for binary merkle tree, n for n-ary merkle tree     
-
-        let nextTransactionNumber = nextTransaction ?? 0; 
-        let merkleRoot = prevMerkleRootCurrentBlock ?? "";
-        
+     */    
+    
+    async createMerkleTree(blockTransactions){
+        let merkleRoot;
+                        
         // If no transactions in a block
-        if (pendingTransactions.length == 0){          
-
+        if (blockTransactions.length == 0){
             merkleRoot = "";
             
-        }else if(pendingTransactions[nextTransactionNumber+1]){ // If this is not the last transaction
-
-            let subTreeHash = "";            
-            // Calculate hash of subtree based on treeNodes param
-            for( var i=0; i<treeNodes; i++){
-                if(pendingTransactions[nextTransactionNumber+i]){
-                    subTreeHash += await this.getLeafNodeHash(pendingTransactions[nextTransactionNumber+i])                    
-                }              
-            }
-            merkleRoot += (await this.getNonLeafNodeHash(subTreeHash));            
-            if(nextTransactionNumber > 0)
-            {
-                merkleRoot = await this.getNonLeafNodeHash(merkleRoot);
+        }else{
+            // Generate a hash of all transactions and store in an array object
+            let hashedTransactions = [];
+            for( var i=0; i<blockTransactions.length; i++){
+                hashedTransactions.push(await this.getLeafNodeHash(blockTransactions[i]));
             }
 
-        }else{ // If this is the last or only transaction
+             // If only one transaction in a block
+            if(blockTransactions.length == 1){
+                merkleRoot = hashedTransactions[0];
+            } // If multiple transactions in block
+            else{
+                merkleRoot = await this.recursivelyCalculateMerkleRootFromHashes(hashedTransactions);
+            }
             
-            merkleRoot += await this.getLeafNodeHash(pendingTransactions[nextTransactionNumber]);
-            if(nextTransactionNumber > 0)
-            {
-                merkleRoot = await this.getNonLeafNodeHash(merkleRoot);
+        }
+        return merkleRoot;
+    }
+
+
+    /*async createMerkleDemo(pendingTransactions){
+        let root =[];
+        for( var i=0; i<pendingTransactions.length; i++){
+            root.push(await this.hashTransaction(pendingTransactions[i]));
+        }
+        
+        while(root.length > 1 ){
+            let temp = [];
+            for (var j = 0; j < root.length; j += 2) {
+				if (j < root.length - 1 && j % 2 == 0){                   
+					temp.push(await this.hashTransactionHash(root[j] + root[j + 1]));
+                }   
+				else temp.push(root[j]);                
+			}           
+            root = temp;
+        }
+    }*/
+
+    /**
+     * Recursively calculate merkle tree for hashes of all transactions
+     * Two functions are used as separate hashing functions are implemented for leaf node and non-leaf nodes
+     * following params:
+     * @treeChildNodes defines the number of leafnodes for a parent node in the merkle tree
+     */
+    async recursivelyCalculateMerkleRootFromHashes(inputArray){
+
+        let treeChildNodes = 2; // 2 for binary merkle tree, n for n-ary merkle tree
+
+        let tempArray = [];
+        // Create a merkle tree based on the treeChildNodes parameter
+        for( var i=0; i<inputArray.length; i+=treeChildNodes ){
+            let tempHash = "";
+            for( var j=0; j<treeChildNodes; j++){
+                if(inputArray[i+j]){
+                    tempHash +=inputArray[i+j];
+                }
             }
+            
+            if(inputArray.length % treeChildNodes !== 0 && i == inputArray.length-1){
+                tempArray.push((tempHash));
+            }else{
+                tempArray.push(await this.getNonLeafNodeHash(tempHash));
+            }
+            
         }
-        
-        nextTransactionNumber += treeNodes;        
-        
-        // Calls the function recursively untill there are no more transactions
-        if(pendingTransactions[nextTransactionNumber]){
-            return await this.calculateMerkleTreeRecursively(pendingTransactions, nextTransactionNumber, merkleRoot)
-        }else{            
-            return merkleRoot;
+        inputArray = tempArray;
+
+        // Recursively call function untill merkle root is generated i.e. array has only 1 hash
+        if(inputArray.length == 1){
+            return inputArray[0];
+        }else{
+            return await this.recursivelyCalculateMerkleRootFromHashes(inputArray);
         }
-        
     }
 
     /**
@@ -242,8 +284,9 @@ class Blockchain {
      */
     async mine() {
         let tx_id_list = [];
-        this.pendingTransactions.forEach((tx) => tx_id_list.push(tx.tx_id));                
-        let merkleRoot = await this.calculateMerkleTreeRecursively(this.pendingTransactions);
+        this.pendingTransactions.forEach((tx) => tx_id_list.push(tx.tx_id));
+        await this.createMerkleDemo(this.pendingTransactions);
+        let merkleRoot = await this.createMerkleTree(this.pendingTransactions);
         let nonce = this.proofOfWork(merkleRoot);
         this.addBlock(nonce, merkleRoot); 
     }    
@@ -269,15 +312,15 @@ class Blockchain {
      * hash with the computed hash.
      */
     chainIsValid(){
-        for(var i=0;i<this.chain.length;i++){            
+        for(var i=0;i<this.chain.length;i++){
 
-            if(i == 0 && this.chain[i].hash !==this.getHash('0','','0')){                
+            if(i == 0 && this.chain[i].hash !==this.getHash('0','','0')){
                 return false;
             }
             if(i > 0 && this.chain[i].hash !== this.getHash(this.chain[i-1].hash, this.chain[i].merkleroot, this.chain[i].nonce)){
                 return false;
             }
-            if(i > 0 && this.chain[i].prevHash !== this.chain[i-1].hash){                
+            if(i > 0 && this.chain[i].prevHash !== this.chain[i-1].hash){
                 return false;
             }
         }
